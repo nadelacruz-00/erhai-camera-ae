@@ -13,6 +13,7 @@ import sys
 
 from .override import DEFAULT_DIR, FILES, FORBIDDEN, VAR, algorithms, \
     pipewire_pid, read_environ, read_file
+from .focus import find_lens
 from .sensor import SPECS, SensorError, open_sensor
 
 STATE_DIR = os.path.expanduser('~/.local/share/camera-ae')
@@ -113,6 +114,12 @@ def main():
         except SensorError:
             report(True, f'{spec.name}: powered off (not streaming), chip ID '
                    f'not checked', critical=False)
+
+    lens = find_lens()
+    report(lens is not None and os.access(lens, os.R_OK | os.W_OK),
+           f'rear focus lens (cn3927): {lens or "not found"}'
+           + (' read/write' if lens and os.access(lens, os.W_OK) else ''),
+           critical=False)
 
     drift = drift_warnings()
     report(not drift, 'libcamera unchanged since install'

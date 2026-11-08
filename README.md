@@ -16,15 +16,21 @@ ErhaiCam are not modified.
    - attaches a passive 320x240 reader to that node;
    - runs ErhaiCam's controller, ported 1:1: target luma 0.45, log-domain steps, highlight guard, and the low-light frame-length ladder;
    - writes integration time, VTS and 4x gain over `/dev/i2c`.
-3. **The engine checks that it is the only writer.** On every analysed frame it reads the exposure register back. If something else changed it (for example libcamera's AGC is back after an upgrade), it turns AE off and logs a warning.
+3. **Rear autofocus**, ported from ErhaiCam. The `cn3927` voice-coil lens is driven through its kernel subdev (`V4L2_CID_FOCUS_ABSOLUTE`) with ErhaiCam's Tenengrad contrast sweep:
+   - a coarse pass over `0, 128 … 896, 1023`, then ±64 around the best position;
+   - a lock, with a 5 s hold;
+   - then monitoring: a refocus after 4 checks below 55 % of the locked sharpness.
+
+   While it sweeps, the frame stays at its base length and the low-light ladder waits. The front camera is fixed-focus.
+4. **The engine checks that it is the only writer.** On every analysed frame it reads the exposure register back. If something else changed it (for example libcamera's AGC is back after an upgrade), it turns AE off and logs a warning.
 
 Differences from ErhaiCam:
 
 - It doesn't freeze exposure while recording (browsers don't signal it).
-- It has no AF short-frame condition.
+- There is no tap-to-focus; AF scores the centre 60 % of a 320x240 frame.
 - It measures the soft-ISP output, not ErhaiCam's WB-corrected preview.
 - It samples the whole frame.
-- It starts from the registers, or from the last converged value.
+- It starts from the last settled values for that camera (kept in `~/.local/state/camera-ae/remembered.json`), otherwise at the exposure ceiling like ErhaiCam. It never starts from the kernel's cached controls, which another client may have left stale (exposure 1 was seen).
 - It writes exposure before VTS when the frame shortens.
 - It sets 4x gain at session start.
 
@@ -53,6 +59,8 @@ whenever that happens.
   libcamera's (bright) auto-exposure back.
 
 ## Tuning
+
+`CAMERA_AF=off` turns autofocus off; the lens then stays where it is.
 
 `CAMERA_AE_TARGET` (default 0.45, clamped to 0.2-0.7) sets the target luma.
 Add it with `systemctl --user edit camera-gamma.service`, as above.
