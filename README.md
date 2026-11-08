@@ -111,6 +111,12 @@ Restart Zen after changing it. Sites that ask for 16:9 themselves (many video-ca
 Delete this engine (`./install.sh --uninstall`, then reboot) once libcamera's
 soft-ISP AGC gets a tunable target, or erhai ships tuned sensor files.
 
+## Credits and licence
+
+- **ErhaiCam** is by **TheMojoMan**. This project ports ErhaiCam's auto-exposure controller (`ae_step`), its frame statistics (`sample_gray`/`stats_cpu`) and its autofocus loop, constants included, from `erhai-cam.cpp`. It only works because of his camera work on the OnePlus Pad 3.
+- ErhaiCam's autofocus algorithm itself comes from **CFM880**'s nabu-camera project (`nabu-autofocus`).
+- ErhaiCam is GPL-2.0-only. As a derived work, this project is too (see `LICENSE`).
+
 ## Tests
 
 `python3 -m unittest discover -s tests`

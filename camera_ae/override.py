@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Is the user tuning override (libcamera Agc/Adjust disabled) in force?
 
 It is when the running pipewire daemon -- where the camera nodes and their

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """A second, passive PipeWire reader on a camera node: 320x240 BGRx frames.
 
 gst-launch writes raw frames to a dedicated pipe fd (not stdout, so stray

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Sessions: one per camera node an app is streaming, AE on its sensor.
 
     IDLE --in use, gates pass--> ATTACHING (sampler up, 5 s first-frame deadline)

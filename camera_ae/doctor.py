@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """`python3 -m camera_ae.doctor`: is the AE engine set up and in charge?
 
 Checks: the service, the tuning override in the running pipewire, which

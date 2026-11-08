@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """camera-gamma.service entry point: follow the PipeWire graph, run the Engine.
 
 Exit 0 after SIGTERM (orderly stop); exit 1 when pw-dump ends on its own

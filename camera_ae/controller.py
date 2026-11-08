@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """ErhaiCam's auto-exposure controller, ported 1:1 from /src/erhai-cam.cpp.
 
     tick()  = ae_step's stride/settle gate      (erhai-cam.cpp:1471-1478)

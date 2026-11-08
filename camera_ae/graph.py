@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """The PipeWire graph from `pw-dump --monitor -N`.
 
 The monitor prints one full dump, then delta arrays: each object replaces

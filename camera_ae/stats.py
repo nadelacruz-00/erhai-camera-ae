@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Frame statistics on BGRx frames, matching ErhaiCam's sample_gray/stats_cpu.
 
 grey = (77R + 150G + 29B) >> 8, v = grey / 255

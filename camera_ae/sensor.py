@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """SmartSens sensor registers over Linux I2C_RDWR (no bit-15 read trick).
 
     exposure  0x3e00..02  24-bit, lines << 5
