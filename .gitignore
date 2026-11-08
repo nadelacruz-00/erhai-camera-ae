@@ -2,3 +2,5 @@
 __pycache__/
 devcheck.log
 devcheck2.log
+mirror-test.log
+*-raw.png

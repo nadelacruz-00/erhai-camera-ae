@@ -1,17 +1,18 @@
 <!doctype html>
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
 <meta charset="utf-8">
 <title>Camera test</title>
 <style>
   body { font: 16px system-ui, sans-serif; margin: 16px; background: #111; color: #eee; }
   video { width: 100%; max-width: 900px; background: #000; display: block; margin: 12px 0; }
   button { font-size: 18px; margin: 4px; padding: 10px 14px; }
+  #cams button.on { outline: 3px solid #7aa2f7; }
   #log { font-family: monospace; white-space: pre-wrap; font-size: 14px; }
 </style>
 <h2>erhai-camera-ae test page</h2>
+<p>No mirroring is applied here: what you see is what the camera sends.</p>
+<div id="cams"><button onclick="listCams()">Find cameras</button></div>
 <div>
-  <button onclick="start('user')">Front</button>
-  <button onclick="start('environment')">Rear</button>
-  <button onclick="switchCam()">Switch camera</button>
   <button onclick="res(640, 480)">640x480</button>
   <button onclick="res(1280, 720)">1280x720</button>
   <button onclick="res(1600, 1200)">1600x1200</button>
@@ -22,24 +23,52 @@
 <video id="v" autoplay playsinline muted></video>
 <div id="log"></div>
 <script>
-let stream = null, facing = 'user';
-const v = document.getElementById('v'), log = m =>
-  (document.getElementById('log').textContent =
-   new Date().toLocaleTimeString() + '  ' + m + '\n' + document.getElementById('log').textContent);
+let stream = null, current = null;
+const v = document.getElementById('v');
+const log = m => (document.getElementById('log').textContent =
+  new Date().toLocaleTimeString() + '  ' + m + '\n' + document.getElementById('log').textContent);
+
 function stop() {
   if (stream) stream.getTracks().forEach(t => t.stop());
-  stream = null; v.srcObject = null; log('stopped');
+  stream = null; v.srcObject = null;
 }
-async function start(f) {
-  facing = f; stop();
+
+// Cameras are picked by device (label), not facingMode: Firefox/Zen cannot
+// tell which PipeWire camera is front or back.
+async function listCams() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: f } });
-    v.srcObject = stream;
-    const s = stream.getVideoTracks()[0].getSettings();
-    log(`started ${f}: ${stream.getVideoTracks()[0].label} ${s.width}x${s.height}`);
+    if (!stream) {                       // labels need one permission grant
+      const s = await navigator.mediaDevices.getUserMedia({ video: true });
+      s.getTracks().forEach(t => t.stop());
+    }
+    const cams = (await navigator.mediaDevices.enumerateDevices())
+      .filter(d => d.kind === 'videoinput');
+    const box = document.getElementById('cams');
+    box.innerHTML = '';
+    cams.forEach((d, i) => {
+      const b = document.createElement('button');
+      b.textContent = d.label || `Camera ${i + 1}`;
+      b.onclick = () => start(d.deviceId, b);
+      box.appendChild(b);
+    });
+    log(`found ${cams.length} camera(s): ` + cams.map(c => c.label).join(' | '));
   } catch (e) { log('ERROR ' + e.name + ': ' + e.message); }
 }
-function switchCam() { start(facing === 'user' ? 'environment' : 'user'); }
+
+async function start(deviceId, button) {
+  stop();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(
+      { video: { deviceId: { exact: deviceId } } });
+    v.srcObject = stream;
+    current = deviceId;
+    document.querySelectorAll('#cams button').forEach(b => b.classList.remove('on'));
+    if (button) button.classList.add('on');
+    const t = stream.getVideoTracks()[0], s = t.getSettings();
+    log(`started ${t.label}: ${s.width}x${s.height}`);
+  } catch (e) { log('ERROR ' + e.name + ': ' + e.message); }
+}
+
 async function res(w, h) {
   if (!stream) return log('start a camera first');
   try {
