@@ -84,7 +84,27 @@ The engine warns at start if `libcamera0.7`, `libcamera-ipa` or the system
 
 ## Device verification (2026-11-08)
 
-_Filled in during Task 4 of the plan: convergence, fps, the ErhaiCam match, low light, the tint/fog gate, and the stop-mid-stream restore._
+Measured on the device with `tools/devcheck.sh` and `tools/devcheck2.sh`.
+
+- **`doctor`:** OK. pipewire runs with the override, and libcamera's tuning lookup picked our file.
+- **Ownership:** with the engine off, a manual exposure write of 401 was still 401 after 5 s, so libcamera no longer writes exposure.
+- **Front:** went from luma 0.74 (the stale driver default 3120/3128) to 0.44-0.47 within about 5 s, at 25 fps. On the same scene, ErhaiCam settled at exposure 779-801 against the engine's 807, both at 4x gain, with luma 0.437 against 0.444.
+- **Rear:** luma 0.46 against ErhaiCam's 0.466. Exposure was 2104 against 1471; the two pipelines frame the 13 MP sensor differently, but the brightness matches. B/G is about 0.82, so the rear is slightly warm.
+- **Low light:** in a dim room the ladder went to `frame 6256 lines`, and pointing at a bright scene brought it back to `frame 3128`.
+- **Switching** (Snapshot, and the Zen test page with resolution changes, reloads and in-page switches): clean start/stop with no `foreign` and no `exposure frozen` lines. Each new stream starts from the last settled exposure.
+- **User sign-off:** Zen matches ErhaiCam.
+- **Boot race (not caused by this):** if a camera app is open while erhai-camera-acl restarts PipeWire about 40 s after login, PipeWire comes back with no camera nodes (`Failed to setup link 'msm_csiphy5' -> 'msm_csid0': Device or resource busy`). Fix it with a reboot (open no camera app for the first minute) or with `systemctl --user restart wireplumber`.
+
+## Zen: full-frame default size
+
+The sensors are 4:3. When a site doesn't request a size, Zen picks one adaptively and gets a cropped 16:9 picture. The profile's `user.js` sets 1600x1200, the full frame and ErhaiCam's choice:
+
+```
+user_pref("media.navigator.video.default_width", 1600);
+user_pref("media.navigator.video.default_height", 1200);
+```
+
+Restart Zen after changing it. Sites that ask for 16:9 themselves (many video-call sites ask for 1280x720) still get a crop.
 
 ## Retire this
 
