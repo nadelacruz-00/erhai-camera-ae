@@ -99,5 +99,20 @@ class Main(unittest.TestCase):
         self.assertEqual(h.writes(), [EXP(3120), VTS(3128)])
 
 
+class StartWarnings(unittest.TestCase):
+    def test_drift_warning_logged_at_start(self):
+        h = Harness()
+        p = FakePopen()
+        p.close()
+        logs = []
+        main_mod.main([], {}, spawn=lambda *a, **k: p,
+                      make_engine=lambda *a, **k: h.engine,
+                      install_signal=lambda s, f: None, pid_fn=lambda: None,
+                      log=lambda lvl, m: logs.append((lvl, m)),
+                      drift_fn=lambda: ['uncalibrated.yaml: abc -> def'])
+        self.assertTrue(any(lvl == 'warning' and 'uncalibrated.yaml' in m
+                            for lvl, m in logs))
+
+
 if __name__ == '__main__':
     unittest.main()

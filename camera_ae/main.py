@@ -12,6 +12,7 @@ import time
 import traceback
 
 from .controller import clamp_target
+from .doctor import drift_warnings
 from .engine import Engine
 from .graph import Graph
 from .override import DEFAULT_DIR, OverrideCheck, pipewire_pid
@@ -34,7 +35,7 @@ def main(argv=None, env=None, spawn=subprocess.Popen, make_engine=Engine,
          install_signal=signal.signal, pid_fn=pipewire_pid,
          sampler_factory=GstSampler, sensor_factory=open_sensor,
          log=journal_log, tuning_dir=DEFAULT_DIR, clock=time.monotonic,
-         select_fn=select.select):
+         select_fn=select.select, drift_fn=drift_warnings):
     env = os.environ if env is None else env
     ae = ae_enabled_from_env(env)
     target = clamp_target(env.get('CAMERA_AE_TARGET'))
@@ -42,6 +43,9 @@ def main(argv=None, env=None, spawn=subprocess.Popen, make_engine=Engine,
     engine = make_engine(sampler_factory, sensor_factory, override, log, clock,
                          ae, target)
     log('info', f'start: AE {"on" if ae else "off (CAMERA_AE)"}, target {target}')
+    for line in drift_fn():
+        log('warning', f'libcamera changed since install ({line}): check '
+            '`python3 -m camera_ae.doctor` and the README post-upgrade list')
     if not ae and override():
         log('warning', 'CAMERA_AE=off while the tuning override is active: '
             'browser camera exposure is frozen')
