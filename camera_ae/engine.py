@@ -25,6 +25,7 @@ BACKOFF = (10.0, 20.0, 40.0, 60.0)
 START_TRIES = 3
 START_SPACING = 1.0
 STATUS_EVERY = 30.0
+MAX_REATTACH = 2           # stream restarts tolerated per session
 FROZEN = 'exposure frozen'
 
 _LOCKS = {}
@@ -56,6 +57,8 @@ class Session:
         self.vts_written = None
         self.mismatch = 0
         self.last_status = None
+        self.first_frame_at = None
+        self.reattaches = 0
 
     # -- reader thread -------------------------------------------------
     def on_frame(self, get_stats):
@@ -73,6 +76,8 @@ class Session:
         with self.lock:
             if self.stopped or self.fault:
                 return
+            if self.first_frame_at is None:
+                self.first_frame_at = self.e.clock()
             if self.phase == 'attaching':
                 self._start()
                 return
@@ -86,7 +91,26 @@ class Session:
             try:
                 self._analyse(luma, hi)
             except SensorError as err:
-                self._set_fault('sensor', err)
+                # A NAK mid-stream is usually the app restarting the camera
+                # (sensor powers down / soft-resets): start over, don't latch.
+                self._reattach(f'I2C error at 0x{err.reg:04x} '
+                               f'(errno {err.errno})')
+
+    def _reattach(self, why):
+        """The sensor was reset under us (a stream restart the graph may not
+        show): run the start sequence again, keeping our last values."""
+        self.reattaches += 1
+        if self.reattaches > MAX_REATTACH:
+            self._set_fault('sensor', f'{why}; gave up after '
+                            f'{MAX_REATTACH} re-attaches')
+            return
+        if self.exp_written is not None and self.vts_written is not None:
+            self.e.remembered[self.kind] = (self.exp_written, self.vts_written)
+        self.phase = 'attaching'
+        self.tries = 0
+        self.last_try = None
+        self.mismatch = 0
+        self.e.log('info', f'{self.spec.name}: {why}; re-attaching')
 
     def _start(self):
         now = self.e.clock()
@@ -143,8 +167,12 @@ class Session:
         if exp != self.exp_written:
             self.mismatch += 1
             if self.mismatch >= 2:
-                self._set_fault('foreign', f'exposure reads {exp}, '
-                                f'wrote {self.exp_written}')
+                if self.reattaches < MAX_REATTACH:
+                    self._reattach(f'exposure reads {exp}, wrote '
+                                   f'{self.exp_written} (stream restart?)')
+                else:
+                    self._set_fault('foreign', f'exposure reads {exp}, '
+                                    f'wrote {self.exp_written}')
             return
         self.mismatch = 0
         new, action = step(self.state, self.spec.limits, luma, hi, self.e.target)
@@ -227,7 +255,8 @@ class Engine:
                 self.end(s, 'node gone', gone=True)
             elif not node.in_use:
                 self.end(s, 'idle', in_use=False)
-            elif s.phase == 'attaching' and now - s.started_at > ATTACH_TIMEOUT:
+            elif (s.phase == 'attaching' and s.first_frame_at is None
+                  and now - s.started_at > ATTACH_TIMEOUT):
                 self.end(s, 'no frames', in_use=True)
                 self._backoff(nid)
                 self.log('warning', f'no frames from node {nid} '
@@ -287,7 +316,14 @@ class Engine:
                            f'no AE; {FROZEN}')
             return
         s = Session(self, node, spec, sensor)
-        s.sampler = self.sampler_factory(node.serial, s.on_frame)
+        try:
+            s.sampler = self.sampler_factory(node.serial, s.on_frame)
+        except Exception as e:                     # gst/setpriv missing, EMFILE
+            self._backoff(node.id)
+            self._log_once(('spawn', node.kind), 'warning',
+                           f'cannot start the frame reader for {spec.name}: '
+                           f'{e}; retrying later; {FROZEN}')
+            return
         self.sessions[node.id] = s
 
     def handle_faults(self):
@@ -300,6 +336,10 @@ class Engine:
             if s.fault is None:
                 continue
             reason, err = s.fault
+            node = self._last.get(s.node_id)
+            if not (node and node.in_use):
+                self.end(s, f'{reason} after the app stopped')   # routine close
+                continue
             if reason == 'foreign':
                 self.end(s, reason, in_use=True, restore=False)
                 self.foreign_latched = True

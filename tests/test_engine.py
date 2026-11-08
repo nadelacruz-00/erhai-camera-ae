@@ -216,9 +216,15 @@ class Threads(unittest.TestCase):
 
     def test_fault_in_reader_ends_on_main_thread(self):
         h = Harness()
-        s = h.start_front()
-        h.xfers['front'].nak(5)
-        self.in_thread(lambda: s.deliver(0.9, n=9))
+        h.eval(front=True)
+        s = h.samplers[0]
+        h.xfers['front'].nak(3)
+
+        def reader():
+            for _ in range(3):
+                s.deliver()
+                h.clock.advance(1.0)
+        self.in_thread(reader)
         self.assertIsNotNone(h.session())                  # not ended there
         self.assertIsNotNone(h.session().fault)
         r, _, _ = select.select([h.engine.wake_fd], [], [], 0)
@@ -270,12 +276,14 @@ class Running(unittest.TestCase):
     def test_foreign_writer_disables_ae(self):
         h = Harness()
         s = h.start_front()
-        h.analyse(s, 0.45)                                  # hold
         x = h.xfers['front']
-        x.poke(0x3e00, (999 << 5).to_bytes(3, 'big'))
-        h.analyse(s, 0.45)
-        x.poke(0x3e00, (998 << 5).to_bytes(3, 'big'))
-        h.analyse(s, 0.45)
+        for i in range(3):                       # 2 re-attaches, then foreign
+            for v in (900 + i, 950 + i):
+                h.analyse(s, 0.45)
+                x.poke(0x3e00, (v << 5).to_bytes(3, 'big'))
+            h.analyse(s, 0.45)
+            if h.session().phase == 'attaching':
+                s.deliver()
         n = len(x.log)
         h.engine.handle_faults()
         self.assertIsNone(h.session())
@@ -315,7 +323,8 @@ class Running(unittest.TestCase):
         h.analyse(s, 0.01)
         sess = h.session()
         self.assertEqual(sess.state.exposure, 400)
-        self.assertEqual(sess.fault[0], 'sensor')
+        self.assertEqual(sess.exp_written, 400)
+        self.assertEqual(sess.phase, 'attaching')      # re-attach, not latch
 
     def test_engine_detaches_when_idle(self):
         h = Harness()
@@ -394,9 +403,11 @@ class Gates(unittest.TestCase):
         self.assertTrue(any(lvl == 'warning' and 'exposure frozen' in m
                             for lvl, m in h.logs))
         h = Harness()
-        s = h.start_front()
-        h.xfers['front'].nak(5)
-        s.deliver(0.9, n=9)
+        h.eval(front=True)
+        h.xfers['front'].nak(3)
+        for _ in range(3):
+            h.samplers[0].deliver()
+            h.clock.advance(1.0)
         h.engine.handle_faults()
         self.assertTrue(any(lvl == 'warning' and 'exposure frozen' in m
                             for lvl, m in h.logs))
@@ -439,3 +450,84 @@ class Gates(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FixPass(unittest.TestCase):
+    def test_sampler_spawn_failure_backs_off(self):
+        h = Harness()
+        real = h.engine.sampler_factory
+        def factory(serial, on_frame):
+            if serial == 82:
+                raise FileNotFoundError(2, 'No such file', 'setpriv')
+            return real(serial, on_frame)
+        h.engine.sampler_factory = factory
+        h.eval(front=True, rear=True)                 # must not raise
+        self.assertIsNotNone(h.session(REAR_ID))      # other camera still starts
+        self.assertIsNone(h.session(FRONT_ID))
+        h.eval(front=True, rear=True)                 # within backoff: no retry
+        self.assertEqual(len(h.lines('cannot start the frame reader')), 1)
+        self.assertTrue(any(lvl == 'warning' and 'exposure frozen' in m
+                            for lvl, m in h.logs))
+
+    def test_stream_restart_reattaches(self):
+        h = Harness(front=(1656, 3128))
+        s = h.start_front()
+        h.analyse(s, 0.9)                              # engine writes 1393
+        mine = h.session().exp_written
+        x = h.xfers['front']
+        x.poke(0x3e00, (3120 << 5).to_bytes(3, 'big'))  # kernel reset at restart
+        h.analyse(s, 0.45)
+        h.analyse(s, 0.45)                             # 2nd mismatch -> re-attach
+        self.assertFalse(h.engine.foreign_latched)
+        self.assertEqual(h.session().phase, 'attaching')
+        x.log.clear()
+        s.deliver()                                    # re-start
+        self.assertEqual(h.session().phase, 'running')
+        self.assertEqual(h.writes(), [EXP(mine), GAIN_FRONT])
+
+    def test_reattach_cap_then_foreign(self):
+        h = Harness()
+        s = h.start_front()
+        x = h.xfers['front']
+        for i in range(3):
+            for v in (900 + i, 950 + i):
+                h.analyse(s, 0.45)
+                x.poke(0x3e00, (v << 5).to_bytes(3, 'big'))
+            h.analyse(s, 0.45)
+            if h.session() and h.session().phase == 'attaching':
+                s.deliver()
+        h.engine.handle_faults()
+        self.assertTrue(h.engine.foreign_latched)
+
+    def test_nak_while_running_reattaches(self):
+        h = Harness()
+        s = h.start_front()
+        h.xfers['front'].nak(1)
+        h.analyse(s, 0.9)                              # readback NAKs
+        self.assertIsNone(h.session().fault)
+        self.assertEqual(h.session().phase, 'attaching')
+        h.clock.advance(1.0)
+        s.deliver()
+        self.assertEqual(h.session().phase, 'running')
+
+    def test_reattach_not_cut_by_attach_timeout(self):
+        h = Harness()
+        s = h.start_front()
+        h.xfers['front'].nak(1)
+        h.analyse(s, 0.9)
+        h.clock.advance(6)                             # long after attach
+        h.eval(front=True)
+        self.assertIsNotNone(h.session())
+
+    def test_fault_after_app_closed_is_quiet(self):
+        h = Harness()
+        h.eval(front=True)
+        h.xfers['front'].nak(3)
+        for _ in range(3):
+            h.samplers[0].deliver()
+            h.clock.advance(1.0)
+        h.engine._last = h.cams(front=False)          # graph already shows idle
+        h.engine.handle_faults()
+        self.assertIsNone(h.session())
+        self.assertFalse(any(lvl == 'warning' for lvl, _ in h.logs))
+        self.assertNotIn(FRONT_ID, h.engine.blocked)
