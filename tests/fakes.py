@@ -14,6 +14,10 @@ class FakeXfer:
         self.log = []
         self.reads = []
         self._nak = []
+        self._nak_writes = []
+
+    def nak_writes(self, n=1, errno=121):
+        self._nak_writes.extend([errno] * n)
 
     def nak(self, n=1, errno=121):
         self._nak.extend([errno] * n)
@@ -27,6 +31,8 @@ class FakeXfer:
         if self._nak:
             err = self._nak.pop(0)
             raise OSError(err, 'Remote I/O error')
+        if self._nak_writes and not any(f & I2C_M_RD for f, _ in msgs):
+            raise OSError(self._nak_writes.pop(0), 'Remote I/O error')
         out = []
         reg = None
         for flags, data in msgs:
@@ -43,3 +49,91 @@ class FakeXfer:
 
     def writes(self):
         return [(hex(r), d.hex(' ')) for r, d in self.log]
+
+
+class FakeClock:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
+
+
+class FakeSampler:
+    """Stands in for GstSampler. deliver() calls on_frame synchronously."""
+    _next_pid = 5000
+
+    def __init__(self, serial, on_frame):
+        self.serial = serial
+        self.on_frame = on_frame
+        self._alive = True
+        self.stopped_by_us = False
+        self.reader_alive = False
+        self.stats_calls = 0
+        FakeSampler._next_pid += 1
+        self.pid = FakeSampler._next_pid
+
+    @property
+    def alive(self):
+        return self._alive
+
+    def deliver(self, luma=0.45, hi=0.0, lo=0.05, n=1):
+        for _ in range(n):
+            def get_stats():
+                self.stats_calls += 1
+                return luma, hi, lo
+            self.on_frame(get_stats)
+
+    def die(self):
+        self._alive = False
+
+    def stop(self):
+        import threading
+        self.stop_thread = threading.current_thread()
+        self.stopped_by_us = True
+        self._alive = False
+
+
+def regs(chip, exposure, vts):
+    """A sensor register file: chip ID, exposure (lines) and VTS."""
+    e = (exposure << 5).to_bytes(3, 'big')
+    return {0x3107: chip >> 8, 0x3108: chip & 0xff,
+            0x3e00: e[0], 0x3e01: e[1], 0x3e02: e[2],
+            0x320e: vts >> 8, 0x320f: vts & 0xff}
+
+
+class FakePopen:
+    """pw-dump stand-in: a real pipe as stdout; terminate() closes it (EOF)."""
+
+    def __init__(self, argv=None, **kw):
+        import os
+        self.argv = argv
+        r, self._w = os.pipe()
+        self.stdout = os.fdopen(r, 'rb', buffering=0)
+        self.pid = 4242
+        self.returncode = None
+
+    def write(self, data):
+        import os
+        os.write(self._w, data)
+
+    def close(self):
+        import os
+        if self._w is not None:
+            os.close(self._w)
+            self._w = None
+            self.returncode = 0
+
+    def terminate(self):
+        self.close()
+
+    kill = terminate
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
