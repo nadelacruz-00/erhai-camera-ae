@@ -1,0 +1,16 @@
+[Unit]
+Description=ErhaiCam auto-exposure for PipeWire camera apps (erhai-camera-ae)
+After=wireplumber.service pipewire.service
+PartOf=pipewire.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I %h/.local/bin/camera-tone.py
+KillMode=mixed
+TimeoutStopSec=10
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=pipewire.service
