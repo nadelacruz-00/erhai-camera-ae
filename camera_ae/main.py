@@ -15,6 +15,7 @@ import traceback
 from .controller import clamp_target
 from .doctor import drift_warnings
 from .engine import Engine
+from .focus import open_lens
 from .graph import Graph
 from .override import DEFAULT_DIR, OverrideCheck, pipewire_pid
 from .sampler import GstSampler
@@ -28,6 +29,10 @@ def ae_enabled_from_env(env):
     return env.get('CAMERA_AE', '').strip().lower() not in OFF_VALUES
 
 
+def af_enabled_from_env(env):
+    return env.get('CAMERA_AF', '').strip().lower() not in OFF_VALUES
+
+
 def journal_log(level, msg):
     print(f'{_PRIORITY.get(level, "<6>")}camera-ae: {msg}', flush=True)
 
@@ -36,14 +41,21 @@ def main(argv=None, env=None, spawn=subprocess.Popen, make_engine=Engine,
          install_signal=signal.signal, pid_fn=pipewire_pid,
          sampler_factory=GstSampler, sensor_factory=open_sensor,
          log=journal_log, tuning_dir=DEFAULT_DIR, clock=time.monotonic,
-         select_fn=select.select, drift_fn=drift_warnings):
+         select_fn=select.select, drift_fn=drift_warnings,
+         lens_factory=open_lens,
+         remember_path=os.path.expanduser('~/.local/state/camera-ae/remembered.json')):
     env = os.environ if env is None else env
     ae = ae_enabled_from_env(env)
     target = clamp_target(env.get('CAMERA_AE_TARGET'))
     override = OverrideCheck(pid_fn, tuning_dir, log)
+    af = af_enabled_from_env(env)
     engine = make_engine(sampler_factory, sensor_factory, override, log, clock,
-                         ae, target)
-    log('info', f'start: AE {"on" if ae else "off (CAMERA_AE)"}, target {target}')
+                         ae, target, af_enabled=af, lens_factory=lens_factory)
+    engine.remember_path = remember_path
+    if remember_path and hasattr(engine, 'load_remembered'):
+        engine.load_remembered()
+    log('info', f'start: AE {"on" if ae else "off (CAMERA_AE)"}, target {target}, '
+        f'AF {"on (rear)" if af else "off (CAMERA_AF)"}')
     for line in drift_fn():
         log('warning', f'libcamera changed since install ({line}): check '
             '`python3 -m camera_ae.doctor` and the README post-upgrade list')

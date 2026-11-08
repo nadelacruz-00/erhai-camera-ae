@@ -36,7 +36,10 @@ def _grey(buf, w, h, stride):
 
 
 def luma_hi_lo(buf, w, h, stride):
-    grey = _grey(buf, w, h, stride)
+    return luma_hi_lo_grey(_grey(buf, w, h, stride))
+
+
+def luma_hi_lo_grey(grey):
     n = len(grey)
     luma = sum(grey) / 255 / n
     hi = sum(grey.count(bytes([g])) * (g / 255 - 0.9) for g in range(230, 256))

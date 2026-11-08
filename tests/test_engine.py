@@ -15,7 +15,7 @@ FRONT_ID, REAR_ID = 33, 76
 
 class Harness:
     def __init__(self, front=(1656, 3128), rear=(2389, 6404), override=True,
-                 ae=True, writable=True, front_chip=0xd154):
+                 ae=True, writable=True, front_chip=0xd154, seed=False):
         self.clock = FakeClock()
         self.logs = []
         self.samplers = []
@@ -39,6 +39,8 @@ class Harness:
         self.engine = Engine(sampler_factory, sensor_factory, lambda: override,
                              lambda lvl, msg: self.logs.append((lvl, msg)),
                              self.clock, ae, 0.45)
+        if seed:            # start sessions at the planted register values
+            self.engine.remembered = {'front': tuple(front), 'rear': tuple(rear)}
 
     def cams(self, front=False, rear=False, front_present=True, extra=None):
         c = {}
@@ -92,17 +94,17 @@ class Start(unittest.TestCase):
         h.samplers[0].deliver()
         self.assertEqual(h.writes(), [EXP(3120), VTS(3128), GAIN_FRONT])
         self.assertEqual(h.session().state, State(3120, 3128))
-        h2 = Harness(front=(1656, 3128))
-        h2.start_front()
-        self.assertEqual(h2.writes(), [GAIN_FRONT])
-        self.assertEqual(h2.session().state.exposure, 1656)
+        h2 = Harness(front=(1656, 3128))               # nothing remembered:
+        h2.start_front()                                # ErhaiCam's ae_max start
+        self.assertEqual(h2.writes(), [EXP(3120), GAIN_FRONT])
+        self.assertEqual(h2.session().state.exposure, 3120)
 
     def test_start_uses_remembered_exposure(self):
         h = Harness(front=(1656, 3128))
         s = h.start_front()
         h.analyse(s, 0.9)
         converged = h.session().state.exposure
-        self.assertLess(converged, 1656)
+        self.assertNotEqual(converged, 3120)
         h.eval(front=False)
         h.xfers['front'].poke(0x3e00, (1656 << 5).to_bytes(3, 'big'))
         h.xfers['front'].log.clear()
@@ -305,19 +307,19 @@ class Running(unittest.TestCase):
         self.assertIsNone(h.session().fault)
 
     def test_setframe_write_order(self):
-        h = Harness(front=(3120, 3128))
+        h = Harness(front=(3120, 3128), seed=True)
         s = h.start_front()
         h.xfers['front'].log.clear()
         h.analyse(s, 0.1)
         self.assertEqual(h.writes(), [VTS(6256), EXP(6248)])
-        h = Harness(front=(1000, 6256))
+        h = Harness(front=(1000, 6256), seed=True)
         s = h.start_front()
         h.xfers['front'].log.clear()
         h.analyse(s, 0.9)
         self.assertEqual(h.writes(), [EXP(841), VTS(3128)])
 
     def test_state_unchanged_on_write_failure(self):
-        h = Harness(front=(400, 3128))
+        h = Harness(front=(400, 3128), seed=True)
         s = h.start_front()
         h.xfers['front'].nak_writes(1)
         h.analyse(s, 0.01)
@@ -342,7 +344,7 @@ class Running(unittest.TestCase):
         self.assertEqual(h.xfers['rear'].reads, [])
 
     def test_node_removed_ends_session(self):
-        h = Harness(front=(6248, 6256))
+        h = Harness(front=(6248, 6256), seed=True)
         h.start_front()
         h.xfers['front'].log.clear()
         h.eval(front_present=False)
@@ -350,26 +352,26 @@ class Running(unittest.TestCase):
         self.assertEqual(h.xfers['front'].log, [])
 
     def test_stop_restores_frame_length(self):
-        h = Harness(front=(6248, 6256))
+        h = Harness(front=(6248, 6256), seed=True)
         h.start_front()
         h.xfers['front'].log.clear()
         h.engine.shutdown()
         self.assertEqual(h.writes(), [EXP(3120), VTS(3128)])
-        h = Harness(front=(6248, 6256))
+        h = Harness(front=(6248, 6256), seed=True)
         h.start_front()
         h.xfers['front'].log.clear()
         h.eval(front=False)
         self.assertEqual(h.xfers['front'].log, [])
 
     def test_stop_restore_only_vts_when_exposure_fits(self):
-        h = Harness(front=(1000, 6256))
+        h = Harness(front=(1000, 6256), seed=True)
         h.start_front()
         h.xfers['front'].log.clear()
         h.engine.shutdown()
         self.assertEqual(h.writes(), [VTS(3128)])
 
     def test_restore_nak_logged_other_sessions_end(self):
-        h = Harness(front=(6248, 6256), rear=(12800, 12808))
+        h = Harness(front=(6248, 6256), rear=(12800, 12808), seed=True)
         h.eval(front=True, rear=True)
         for s in h.samplers:
             s.deliver()
@@ -436,7 +438,7 @@ class Gates(unittest.TestCase):
         self.assertEqual(h.factory_calls, [])
 
     def test_session_logs_start_stop(self):
-        h = Harness(front=(3120, 3128))
+        h = Harness(front=(3120, 3128), seed=True)
         s = h.start_front()
         self.assertTrue(h.lines('start node=33 sensor=sc820cs exposure=3120 vts=3128'))
         h.analyse(s, 0.1)
@@ -446,10 +448,6 @@ class Gates(unittest.TestCase):
         self.assertTrue(h.lines('luma='))
         h.eval(front=False)
         self.assertTrue(h.lines('stop node=33 sensor=sc820cs reason=idle'))
-
-
-if __name__ == '__main__':
-    unittest.main()
 
 
 class FixPass(unittest.TestCase):
@@ -531,3 +529,36 @@ class FixPass(unittest.TestCase):
         self.assertIsNone(h.session())
         self.assertFalse(any(lvl == 'warning' for lvl, _ in h.logs))
         self.assertNotIn(FRONT_ID, h.engine.blocked)
+
+
+class StartState(unittest.TestCase):
+    def test_stale_register_ignored_starts_at_ae_max(self):
+        h = Harness(front=(1, 3128))                    # stale cached control
+        h.start_front()
+        self.assertEqual(h.session().state, State(3120, 3128))
+        self.assertEqual(h.writes(), [EXP(3120), GAIN_FRONT])
+
+    def test_remembered_persisted_across_engines(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'remembered.json')
+            h = Harness(front=(1656, 3128))
+            h.engine.remember_path = path
+            s = h.start_front()
+            h.analyse(s, 0.9)
+            converged = h.session().exp_written
+            h.eval(front=False)
+            h2 = Harness(front=(1, 3128))
+            h2.engine.remember_path = path
+            h2.engine.load_remembered()
+            h2.start_front()
+            self.assertEqual(h2.session().state.exposure, converged)
+            h3 = Harness(front=(1, 3128))
+            h3.engine.remember_path = os.path.join(d, 'missing.json')
+            h3.engine.load_remembered()                 # no file: no error
+            h3.start_front()
+            self.assertEqual(h3.session().state.exposure, 3120)
+
+
+if __name__ == '__main__':
+    unittest.main()

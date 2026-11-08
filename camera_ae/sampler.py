@@ -10,7 +10,8 @@ import subprocess
 import threading
 import time
 
-from .stats import luma_hi_lo
+from .focus import centre, tenengrad
+from .stats import _grey, luma_hi_lo_grey
 
 W, H = 320, 240
 FRAME_BYTES = W * H * 4
@@ -28,6 +29,26 @@ def sampler_argv(serial, fd=3):
             f'video/x-raw,format=BGRx,width={W},height={H}',
             '!', 'queue', 'leaky=downstream', 'max-size-buffers=1',
             '!', 'fdsink', f'fd={fd}']
+
+
+class Frame:
+    """One delivered frame; the grey image is computed at most once and
+    shared by the AE statistics and the AF sharpness score."""
+
+    def __init__(self, data):
+        self.data = data
+        self._grey = None
+
+    def grey(self):
+        if self._grey is None:
+            self._grey = _grey(self.data, W, H, W * 4)
+        return self._grey
+
+    def stats(self):
+        return luma_hi_lo_grey(self.grey())
+
+    def sharp(self):
+        return tenengrad(*centre(self.grey(), W, H))
 
 
 class GstSampler:
@@ -74,9 +95,9 @@ class GstSampler:
                     got += n
                 self.frames += 1
                 self._last = self.clock()
-                frame = bytes(buf)
+                frame = Frame(bytes(buf))
                 try:
-                    self.on_frame(lambda: luma_hi_lo(frame, W, H, W * 4))
+                    self.on_frame(frame.stats, frame.sharp)
                 except Exception as e:           # engine wraps its own; belt
                     self.error = e
                     return

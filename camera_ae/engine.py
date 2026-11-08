@@ -14,11 +14,15 @@ session -- it records session.fault and wakes the main loop through a
 self-pipe. Only the main thread starts/ends sessions and stops samplers.
 A per-sensor process-global lock serialises all register I/O on a sensor.
 """
+import json
 import os
 import threading
 
-from .controller import (SetExposure, SetFrame, State, ae_max, max_lines,
-                         step, tick)
+from dataclasses import replace
+
+from .controller import (SETTLE, SetExposure, SetFrame, State, ae_max,
+                         max_lines, step, tick)
+from .focus import Autofocus, LensError
 from .sensor import SPECS, SensorError
 
 ATTACH_TIMEOUT = 5.0
@@ -60,11 +64,13 @@ class Session:
         self.last_status = None
         self.first_frame_at = None
         self.reattaches = 0
+        self.af = None            # Autofocus, rear only
+        self.lens = None
 
     # -- reader thread -------------------------------------------------
-    def on_frame(self, get_stats):
+    def on_frame(self, get_stats, get_sharp=None):
         try:
-            self._on_frame(get_stats)
+            self._on_frame(get_stats, get_sharp)
         except Exception as e:                     # never kill the reader
             self._set_fault('exception', e)
 
@@ -73,7 +79,7 @@ class Session:
             self.fault = (reason, err)
         self.e.wake()
 
-    def _on_frame(self, get_stats):
+    def _on_frame(self, get_stats, get_sharp=None):
         with self.lock:
             if self.stopped or self.fault:
                 return
@@ -81,7 +87,11 @@ class Session:
                 self.first_frame_at = self.e.clock()
             if self.phase == 'attaching':
                 self._start()
+                if self.phase == 'running' and self.af is not None:
+                    self._af_start()
                 return
+            if self.af is not None and get_sharp is not None:
+                self._af_frame(get_sharp)
             self.state, go = tick(self.state)
             if not go:
                 return
@@ -127,13 +137,15 @@ class Session:
             raw_exp = self.sensor.read_exposure()
             raw_vts = self.sensor.read_vts()
             self.exp_written, self.vts_written = raw_exp, raw_vts
-            if self.kind in self.e.remembered:
-                exp, vts = self.e.remembered[self.kind]
-            else:
-                vts = raw_vts if lim.vts_default <= raw_vts <= lim.vts_max \
-                    else lim.vts_default
-                exp = raw_exp if 0 < raw_exp <= max_lines(vts) \
-                    else ae_max(lim, vts)
+            # The cached V4L2 controls the kernel restores at stream start are
+            # stale (another client's last values -- seen: exposure 1), so
+            # never start from them: the last settled values for this sensor,
+            # else ErhaiCam's own start, the exposure ceiling at the base frame.
+            exp, vts = self.e.remembered.get(
+                self.kind, (ae_max(lim, lim.vts_default), lim.vts_default))
+            if not (lim.vts_default <= vts <= lim.vts_max
+                    and 0 < exp <= max_lines(vts)):
+                exp, vts = ae_max(lim, lim.vts_default), lim.vts_default
             self._write_frame(vts, exp)
             self.sensor.write_gain_4x()
         except SensorError as err:
@@ -145,6 +157,41 @@ class Session:
         self.last_status = now
         self.e.log('info', f'start node={self.node_id} sensor={self.spec.name} '
                    f'exposure={exp} vts={vts}')
+
+    # -- autofocus (rear) --------------------------------------------------
+    def _af_lens(self, pos):
+        try:
+            self.lens.set(pos)
+        except LensError as err:
+            self.af = None
+            self.e.log('warning', f'{self.spec.name}: autofocus off for this '
+                       f'stream: lens error ({err.strerror}); AE continues')
+            return False
+        return True
+
+    def _af_start(self):
+        if self._af_lens(self.af.start(self.lens.position)):
+            self._af_short_frame()
+
+    def _af_short_frame(self):
+        """A sweep wants the base frame rate (ErhaiCam start_sweep)."""
+        lim = self.spec.limits
+        if self.state.vts > lim.vts_default:
+            exp = max_lines(lim.vts_default)
+            self._write_frame(lim.vts_default, exp)
+            self.state = replace(self.state, exposure=exp,
+                                 vts=lim.vts_default, settle=SETTLE)
+            self.e.log('info', f'{self.spec.name}: autofocus: base frame '
+                       f'{lim.vts_default} lines for the sweep, exposure {exp}')
+
+    def _af_frame(self, get_sharp):
+        was = self.af.mode
+        move = self.af.on_frame(self.e.clock(), get_sharp)
+        for ev in self.af.drain_events():
+            self.e.log('info', f'{self.spec.name}: af: {ev}')
+        if move is not None and self._af_lens(move):
+            if was != 'sweep' and self.af.mode == 'sweep':
+                self._af_short_frame()
 
     def _write_frame(self, vts, exp):
         """Write whatever differs; never let exposure exceed the frame."""
@@ -176,7 +223,9 @@ class Session:
                                     f'wrote {self.exp_written}')
             return
         self.mismatch = 0
-        new, action = step(self.state, self.spec.limits, luma, hi, self.e.target)
+        sweeping = self.af is not None and self.af.wants_short_frames
+        new, action = step(self.state, self.spec.limits, luma, hi, self.e.target,
+                           short_frames=sweeping)
         if isinstance(action, SetFrame):
             self._write_frame(action.vts, action.exposure)
             self.e.log('info', f'{self.spec.name}: frame {action.vts} lines, '
@@ -211,7 +260,7 @@ class Session:
 
 class Engine:
     def __init__(self, sampler_factory, sensor_factory, override_fn, log,
-                 clock, ae_enabled, target):
+                 clock, ae_enabled, target, af_enabled=True, lens_factory=None):
         self.sampler_factory = sampler_factory
         self.sensor_factory = sensor_factory
         self.override_fn = override_fn
@@ -219,6 +268,9 @@ class Engine:
         self.clock = clock
         self.ae_enabled = ae_enabled
         self.target = target
+        self.af_enabled = af_enabled
+        self.lens_factory = lens_factory
+        self.remember_path = None
         self.sessions = {}
         self.blocked = {}          # node id -> reason, until the app stops
         self.backoff = {}          # node id -> (until, step index)
@@ -230,6 +282,28 @@ class Engine:
         self.wake_fd, self._wake_w = os.pipe()
         os.set_blocking(self.wake_fd, False)
         os.set_blocking(self._wake_w, False)
+
+    def load_remembered(self):
+        try:
+            with open(self.remember_path) as f:
+                data = json.load(f)
+        except (OSError, TypeError, ValueError):
+            return
+        for kind, pair in data.items():
+            if kind in SPECS and isinstance(pair, list) and len(pair) == 2:
+                self.remembered[kind] = (int(pair[0]), int(pair[1]))
+
+    def _save_remembered(self):
+        if not self.remember_path:
+            return
+        tmp = self.remember_path + '.tmp'
+        try:
+            os.makedirs(os.path.dirname(self.remember_path), exist_ok=True)
+            with open(tmp, 'w') as f:
+                json.dump({k: list(v) for k, v in self.remembered.items()}, f)
+            os.replace(tmp, self.remember_path)
+        except OSError as e:
+            self.log('info', f'could not save {self.remember_path}: {e}')
 
     def wake(self):
         try:
@@ -317,6 +391,19 @@ class Engine:
                            f'no AE; {FROZEN}')
             return
         s = Session(self, node, spec, sensor)
+        if node.kind == 'rear' and self.af_enabled and self.lens_factory:
+            try:
+                lens = self.lens_factory()
+                if lens is None:
+                    self._log_once(('nolens',), 'info',
+                                   'no cn3927 lens subdev found; no autofocus')
+            except LensError as err:
+                lens = None
+                self._log_once(('lens', err.errno), 'warning',
+                               f'cannot open the cn3927 lens: {err.strerror}; '
+                               f'no autofocus')
+            if lens is not None:
+                s.lens, s.af = lens, Autofocus()
         try:
             s.sampler = self.sampler_factory(node.serial, s.on_frame)
         except Exception as e:                     # gst/setpriv missing, EMFILE
@@ -367,7 +454,10 @@ class Engine:
                     s.restore()
                 if s.exp_written is not None:
                     self.remembered[s.kind] = (s.exp_written, s.vts_written)
+                    self._save_remembered()
         s.sampler.stop()
+        if s.lens is not None:
+            s.lens.close()
         if s.sampler.reader_alive:
             self._dying[s.kind] = s.sampler
         self.sessions.pop(s.node_id, None)

@@ -153,5 +153,15 @@ class Step(unittest.TestCase):
         self.assertEqual(action, SetExposure(24012))
 
 
+class AfInterplay(unittest.TestCase):
+    def test_ladder_up_blocked_while_af_sweeps(self):
+        state, action = step(State(3120, 3128), FRONT, 0.1, 0.0,
+                             short_frames=True)
+        self.assertEqual(action, Hold())
+        self.assertTrue(state.at_limit)
+        _, action = step(State(3120, 3128), FRONT, 0.1, 0.0)
+        self.assertEqual(action, SetFrame(6256, 6248))
+
+
 if __name__ == '__main__':
     unittest.main()

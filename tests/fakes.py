@@ -73,6 +73,7 @@ class FakeSampler:
         self.stopped_by_us = False
         self.reader_alive = False
         self.stats_calls = 0
+        self.sharp_calls = 0
         FakeSampler._next_pid += 1
         self.pid = FakeSampler._next_pid
 
@@ -80,12 +81,16 @@ class FakeSampler:
     def alive(self):
         return self._alive
 
-    def deliver(self, luma=0.45, hi=0.0, lo=0.05, n=1):
+    def deliver(self, luma=0.45, hi=0.0, lo=0.05, n=1, sharp=None):
         for _ in range(n):
             def get_stats():
                 self.stats_calls += 1
                 return luma, hi, lo
-            self.on_frame(get_stats)
+
+            def get_sharp():
+                self.sharp_calls += 1
+                return sharp() if sharp else 0.0
+            self.on_frame(get_stats, get_sharp)
 
     def die(self):
         self._alive = False
@@ -137,3 +142,22 @@ class FakePopen:
 
     def wait(self, timeout=None):
         return self.returncode
+
+
+class FakeLens:
+    def __init__(self, position=896, fail_after=None):
+        self.position = position
+        self.moves = []
+        self.fail_after = fail_after
+        self.closed = False
+
+    def set(self, pos):
+        from camera_ae.focus import LensError
+        if self.fail_after is not None and len(self.moves) >= self.fail_after:
+            raise LensError(5, 'Input/output error')
+        pos = min(1023, max(0, int(pos)))
+        self.moves.append(pos)
+        self.position = pos
+
+    def close(self):
+        self.closed = True

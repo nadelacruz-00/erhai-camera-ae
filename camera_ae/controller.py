@@ -96,8 +96,11 @@ def clamp_target(value):
     return min(0.7, max(0.2, t))
 
 
-def step(state, limits, luma, hi, target=TARGET):
-    """One analysed frame of ae_step. Returns (new State, Action)."""
+def step(state, limits, luma, hi, target=TARGET, short_frames=False):
+    """One analysed frame of ae_step. Returns (new State, Action).
+
+    short_frames: autofocus is sweeping (ErhaiCam's af_wants_short_frames),
+    so the low-light ladder must not lengthen the frame."""
     err = math.log2(target / min(1.0, max(LUMA_MIN, luma)))
     s = min(MAX_STEP, max(-MAX_STEP, err * GAIN))
     if abs(err) < DEADBAND:
@@ -111,7 +114,7 @@ def step(state, limits, luma, hi, target=TARGET):
     top = ae_max(limits, vts)
 
     # Ladder up: at the ceiling and still dark -> double the frame.
-    if s > 0.0 and exposure >= top and vts < limits.vts_max:
+    if s > 0.0 and exposure >= top and vts < limits.vts_max and not short_frames:
         vts = min(vts * 2, limits.vts_max)
         exposure = max_lines(vts)
         # Returns before at_limit is recomputed: carried over, as in C++.

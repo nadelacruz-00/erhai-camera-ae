@@ -44,7 +44,7 @@ class Sampler(unittest.TestCase):
         got = []
         done = threading.Event()
 
-        def on_frame(get_stats):
+        def on_frame(get_stats, get_sharp):
             got.append(1)
 
         s = GstSampler(1, on_frame, argv_fn=lambda serial, fd: child(fd, 7, 1000),
@@ -56,7 +56,7 @@ class Sampler(unittest.TestCase):
         s.stop()
 
     def test_gst_sampler_stop_not_death(self):
-        s = GstSampler(1, lambda g: None,
+        s = GstSampler(1, lambda g, s: None,
                        argv_fn=lambda serial, fd: child(fd, 1, 0, sleep=30),
                        wrap=())
         self.assertTrue(wait_for(lambda: s.frames >= 1))
@@ -69,16 +69,17 @@ class Sampler(unittest.TestCase):
 
     def test_get_stats_returns_luma_hi_lo(self):
         seen = []
-        s = GstSampler(1, lambda g: seen.append(g()),
+        s = GstSampler(1, lambda g, s: seen.append((g(), s())),
                        argv_fn=lambda serial, fd: child(fd, 1), wrap=())
         self.assertTrue(wait_for(lambda: seen))
-        luma, hi, lo = seen[0]
+        (luma, hi, lo), sharp = seen[0]
         self.assertAlmostEqual(luma, 0.0)          # frame 0 is all zeros
+        self.assertEqual(sharp, 0.0)               # and flat
         s.stop()
 
     def test_frame_watchdog(self):
         clock = FakeClock()
-        s = GstSampler(1, lambda g: None,
+        s = GstSampler(1, lambda g, s: None,
                        argv_fn=lambda serial, fd: child(fd, 1, 0, sleep=30),
                        wrap=(), clock=clock)
         self.assertTrue(wait_for(lambda: s.frames >= 1))

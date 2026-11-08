@@ -29,7 +29,8 @@ class Runner:
             [], {}, spawn=lambda *a, **k: self.popen,
             make_engine=lambda *a, **k: self.h.engine,
             install_signal=lambda sig, fn: self.handlers.__setitem__(sig, fn),
-            pid_fn=lambda: None, log=lambda lvl, msg: self.h.logs.append((lvl, msg)))
+            pid_fn=lambda: None, log=lambda lvl, msg: self.h.logs.append((lvl, msg)),
+            remember_path=None)
 
     def start(self):
         self.t.start()
@@ -51,7 +52,7 @@ class Runner:
 
 class Main(unittest.TestCase):
     def test_sigterm_restores(self):
-        h = Harness(front=(6248, 6256))
+        h = Harness(front=(6248, 6256), seed=True)
         r = Runner(h).start()
         r.popen.write(DUMP)
         r.wait_session()
@@ -73,7 +74,7 @@ class Main(unittest.TestCase):
         self.assertEqual(h.engine.sessions, {})
 
     def test_crash_in_evaluate_restores(self):
-        h = Harness(front=(6248, 6256))
+        h = Harness(front=(6248, 6256), seed=True)
         real = h.engine.evaluate
         calls = []
 
@@ -109,9 +110,17 @@ class StartWarnings(unittest.TestCase):
                       make_engine=lambda *a, **k: h.engine,
                       install_signal=lambda s, f: None, pid_fn=lambda: None,
                       log=lambda lvl, m: logs.append((lvl, m)),
-                      drift_fn=lambda: ['uncalibrated.yaml: abc -> def'])
+                      drift_fn=lambda: ['uncalibrated.yaml: abc -> def'],
+                      remember_path=None)
         self.assertTrue(any(lvl == 'warning' and 'uncalibrated.yaml' in m
                             for lvl, m in logs))
+
+
+class AfSwitch(unittest.TestCase):
+    def test_af_enabled_from_env(self):
+        for v in ('off', 'OFF', '0', 'false', 'no'):
+            self.assertFalse(main_mod.af_enabled_from_env({'CAMERA_AF': v}))
+        self.assertTrue(main_mod.af_enabled_from_env({}))
 
 
 if __name__ == '__main__':
