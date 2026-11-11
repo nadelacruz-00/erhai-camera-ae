@@ -30,7 +30,8 @@ Differences from ErhaiCam:
 - There is no tap-to-focus; AF scores the centre 60 % of a 320x240 frame.
 - It measures the soft-ISP output, not ErhaiCam's WB-corrected preview.
 - It samples the whole frame.
-- It starts from the last settled values for that camera (kept in `~/.local/state/camera-ae/remembered.json`), otherwise at the exposure ceiling like ErhaiCam. It never starts from the kernel's cached controls, which another client may have left stale (exposure 1 was seen).
+- It starts from the last settled exposure for that camera (kept in `~/.local/state/camera-ae/remembered.json`), otherwise at the exposure ceiling like ErhaiCam. It never starts from the kernel's cached controls, which another client may have left stale (exposure 1 was seen).
+- Like ErhaiCam, every stream starts at the base frame length: a remembered long frame from the low-light ladder is not restored (the exposure is clamped to the base ceiling), so a new session does not start at low fps. The ladder goes up again by itself if the scene is still dark.
 - It writes exposure before VTS when the frame shortens.
 - It sets 4x gain at session start.
 
