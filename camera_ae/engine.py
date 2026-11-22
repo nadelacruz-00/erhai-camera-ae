@@ -150,6 +150,10 @@ class Session:
             vts = lim.vts_default
             self._write_frame(vts, exp)
             self.sensor.write_gain_4x()
+            # The stream start reloaded the mode table; on the stock driver
+            # it reads the front out mirrored (sensor.REG_READOUT).
+            unmirrored = (self.kind == 'front'
+                          and self.sensor.unmirror_readout())
         except SensorError as err:
             if self.tries >= START_TRIES:
                 self._set_fault('start', err)
@@ -159,6 +163,9 @@ class Session:
         self.last_status = now
         self.e.log('info', f'start node={self.node_id} sensor={self.spec.name} '
                    f'exposure={exp} vts={vts}')
+        if unmirrored:
+            self.e.log('info', f'{self.spec.name}: readout un-mirrored '
+                       '(0x3221 mirror bits set)')
 
     # -- autofocus (rear) --------------------------------------------------
     def _af_lens(self, pos):

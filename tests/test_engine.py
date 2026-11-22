@@ -92,6 +92,7 @@ class Harness:
 EXP = lambda n: ('0x3e00', (n << 5).to_bytes(3, 'big').hex(' '))
 VTS = lambda n: ('0x320e', n.to_bytes(2, 'big').hex(' '))
 GAIN_FRONT = ('0x3e07', '80 0f')
+MIRROR = lambda v: ('0x3221', f'{v:02x}')
 
 
 class Start(unittest.TestCase):
@@ -120,6 +121,34 @@ class Start(unittest.TestCase):
         h.xfers['front'].log.clear()
         h.start_front()
         self.assertEqual(h.writes(), [EXP(converged), GAIN_FRONT])
+
+    def test_start_unmirrors_front_readout(self):
+        # Stock driver: 0x3221 = 0x60 reads the front out mirrored (browser
+        # self-view and the sent picture reversed).  Set the mirror bits.
+        h = Harness()
+        h.xfers['front'].poke(0x3221, b'\x60')
+        h.start_front()
+        self.assertEqual(h.writes(), [EXP(3120), GAIN_FRONT, MIRROR(0x66)])
+        self.assertEqual(h.session().phase, 'running')
+        self.assertEqual(len(h.lines('readout un-mirrored')), 1)
+
+    def test_start_keeps_flip_bits_and_skips_unmirrored(self):
+        h = Harness()
+        h.xfers['front'].poke(0x3221, b'\x00')        # no flip, no mirror
+        h.start_front()
+        self.assertEqual(h.writes()[-1], MIRROR(0x06))
+        h2 = Harness()                                 # already 0x66
+        h2.start_front()
+        self.assertNotIn(MIRROR(0x66), h2.writes())
+        self.assertFalse(h2.lines('readout un-mirrored'))
+
+    def test_rear_readout_not_touched(self):
+        h = Harness()
+        h.xfers['rear'].poke(0x3221, b'\x60')
+        h.eval(rear=True)
+        h.samplers[-1].deliver()
+        self.assertEqual(h.session(REAR_ID).phase, 'running')
+        self.assertFalse([w for w in h.writes('rear') if w[0] == '0x3221'])
 
     def test_start_resets_remembered_long_frame(self):
         # ErhaiCam (erhai-cam.cpp stream start): the frame goes back to the

@@ -102,12 +102,13 @@ class FakeSampler:
         self._alive = False
 
 
-def regs(chip, exposure, vts):
-    """A sensor register file: chip ID, exposure (lines) and VTS."""
+def regs(chip, exposure, vts, readout=0x66):
+    """A sensor register file: chip ID, exposure (lines), VTS and the readout
+    direction (0x3221; 0x66 = un-mirrored, the stock front driver writes 0x60)."""
     e = (exposure << 5).to_bytes(3, 'big')
     return {0x3107: chip >> 8, 0x3108: chip & 0xff,
             0x3e00: e[0], 0x3e01: e[1], 0x3e02: e[2],
-            0x320e: vts >> 8, 0x320f: vts & 0xff}
+            0x320e: vts >> 8, 0x320f: vts & 0xff, 0x3221: readout}
 
 
 class FakePopen:

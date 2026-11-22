@@ -22,7 +22,8 @@ ErhaiCam are not modified.
    - then monitoring: a refocus after 4 checks below 55 % of the locked sharpness.
 
    While it sweeps, the frame stays at its base length and the low-light ladder waits. The front camera is fixed-focus.
-4. **The engine checks that it is the only writer.** On every analysed frame it reads the exposure register back. If something else changed it (for example libcamera's AGC is back after an upgrade), it turns AE off and logs a warning.
+4. **The front picture is un-mirrored.** The stock SC820CS driver sets the readout register `0x3221` to `0x60`, which reads the front sensor out mirrored: in a browser the self-view and the picture the other side sees are both reversed. At every front session start the engine sets the two mirror bits (`0x66`, as Android and ErhaiCam do), keeping the flip bits; the colours do not change, and with a driver that already sets `0x66` nothing is written. Like the exposure, this needs a running session: with `CAMERA_AE=off`, or before the tuning override is active, the front stays mirrored.
+5. **The engine checks that it is the only writer.** On every analysed frame it reads the exposure register back. If something else changed it (for example libcamera's AGC is back after an upgrade), it turns AE off and logs a warning.
 
 Differences from ErhaiCam:
 

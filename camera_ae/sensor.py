@@ -24,6 +24,12 @@ REG_VTS = 0x320e
 REG_FINE_GAIN = 0x3e07
 REG_GAIN_BASE = 0x3e06
 REG_CHIP_ID = 0x3107
+# Readout direction: bits [6:5] vertical flip, [2:1] horizontal mirror.  The
+# stock SC820CS driver writes 0x60, which reads the front out MIRRORED (text
+# reversed); 0x66, the value Android uses, is the true view.  Colours (Bayer
+# order) do not change.  Measured on 7.3.4, 2026-11-22.
+REG_READOUT = 0x3221
+READOUT_MIRROR = 0x06
 
 
 @dataclass(frozen=True)
@@ -141,6 +147,14 @@ class Sensor:
         else:
             self.write(REG_FINE_GAIN, b'\x80')
             self.write(self.spec.gain_reg, b'\x0f')
+
+    def unmirror_readout(self):
+        """Set both mirror bits, keep the flip bits.  True if it wrote."""
+        value = self.read(REG_READOUT, 1)[0]
+        if value & READOUT_MIRROR == READOUT_MIRROR:
+            return False
+        self.write(REG_READOUT, bytes([value | READOUT_MIRROR]))
+        return True
 
     def read_gain(self):
         raw = self.read(REG_GAIN_BASE, 4)
